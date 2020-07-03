@@ -1,0 +1,178 @@
+---
+title: "Practical ML Project"
+author: "Muhammad Imdad Ullah"
+date: "7/2/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Overview
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.
+
+In this project, we will use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways.
+
+The data consists of a Training data and a Test data (to be used to validate the selected model). The goal is to predict the manner in which we did the exercise in our course. This is the “classe” variable in the training set. You may use any of the other variables to predict with.
+
+Note: The dataset used in this project is a courtesy of “Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers’ Data Classification of Body Postures and Movements”
+
+
+## Library and Data Loading
+ 
+```{r, cache = T}
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(corrplot)
+library(RColorBrewer)
+library(rattle)
+library(gbm)
+```
+
+### Downloading Data
+```{r, cache = T}
+trainUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+trainFile <- "./data/pml-training.csv"
+testFile  <- "./data/pml-testing.csv"
+if (!file.exists("./data")) {
+  dir.create("./data")
+}
+if (!file.exists(trainFile)) {
+  download.file(trainUrl, destfile=trainFile, method="curl")
+}
+if (!file.exists(testFile)) {
+  download.file(testUrl, destfile=testFile, method="curl")
+}
+```
+### Read the Data
+Let read the downloaded csv files into two data frames.  
+```{r, cache = T}
+trainRaw <- read.csv("./data/pml-training.csv")
+testRaw <- read.csv("./data/pml-testing.csv")
+dim(trainRaw);dim(testRaw)
+```
+The training data set contains 19622 observations/rows and 160 column/variables, while the testing data set contains 20 observations/rows and 160 variables. The "classe" variable in the training set is the outcome to predict.
+
+### Cleaning the data
+In this step, we will clean the data and get rid of variables with missing values.
+```{r, cache = T}
+sum(complete.cases(trainRaw))
+```
+First, we remove columns that contain NA missing values.
+```{r, cache = T}
+trainRaw <- trainRaw[, colSums(is.na(trainRaw)) == 0] 
+testRaw <- testRaw[, colSums(is.na(testRaw)) == 0] 
+```  
+Now, we get rid of some others columns that do not contribute much to the accelerometer measurements.
+```{r, cache = T}
+classe <- trainRaw$classe
+trainRemove <- grepl("^X|timestamp|window", names(trainRaw))
+trainRaw <- trainRaw[, !trainRemove]
+trainCleaned <- trainRaw[, sapply(trainRaw, is.numeric)]
+trainCleaned$classe <- classe
+testRemove <- grepl("^X|timestamp|window", names(testRaw))
+testRaw <- testRaw[, !testRemove]
+testCleaned <- testRaw[, sapply(testRaw, is.numeric)]
+```
+Now, the cleaned training data set contains 19622 observations and 53 variables, while the testing data set contains 20 observations and 53 variables. 
+
+### Preparing the datasets for prediction
+Here we split the cleaned training set into a pure training data set (70%) and a validation data set (30%).
+
+```{r, cache = T}
+set.seed(22519) # For reproducible results
+inTrain <- createDataPartition(trainCleaned$classe, p=0.70, list=F)
+trainData <- trainCleaned[inTrain, ]
+testData <- trainCleaned[-inTrain, ]
+dim(trainData); dim(testData)
+```
+### Visualize the Correlation Matrix
+```{r}
+corrPlot <- cor(trainData[, -length(names(trainData))])
+corrplot(corrPlot, method="color")
+```
+
+## Model Building
+We will use different algorithm to predict the outcome.
+
+### Model Building with Random Forest
+We fit a predictive model for activity recognition using **Random Forest** algorithm because it automatically selects important variables and is robust to correlated covariates and outliers in general. We will use **5-fold cross validation** when applying the algorithm.  
+
+```{r, cache = T}
+controlRf <- trainControl(method="cv", 5, verboseIter=FALSE)
+
+modelRf <- train(classe ~ ., data=trainData, 
+                 method="rf", 
+                 trControl=controlRf, ntree=250)
+
+modelRf$finalModel
+plot(modelRf)
+```
+Let estimate the performance of the model on the validation data set.  
+```{r, cache = T}
+predictRf <- predict(modelRf, newdata=testData)
+cmrf<-confusionMatrix(predictRf, factor(testData$classe))
+
+accuracy <- postResample(predictRf, factor(testData$classe)); accuracy
+oose <- 1 - cmrf$overall[1]; oose
+```
+
+So, the estimated accuracy of the model is 99.37% and the estimated out-of-sample error is 0.63%.
+
+## Predicting for Test Data Set
+Now, we apply the model to the original testing data set downloaded from the data source. We remove the `problem_id` column first.  
+```{r, cache = T}
+result <- predict(modelRf, testCleaned[, -length(names(testCleaned))]);result
+```  
+
+### Model Building with Classification Trees
+We first obtain the model, and then we use the `fancyRpartPlot()` function to plot the classification tree as a dendogram.
+
+```{r}
+set.seed(12345)
+decisionTreeMod1 <- rpart(classe ~ ., data=trainData, method="class")
+fancyRpartPlot(decisionTreeMod1)
+```
+Let validate the model “decisionTreeModel” on the testData to find out how well it performs by looking at the accuracy variable.
+```{r}
+predictTreeMod1 <- predict(decisionTreeMod1, testData, type = "class")
+cmtree <- confusionMatrix(predictTreeMod1, as.factor(testData$classe))
+cmtree
+```
+Matrix plot
+```{r}
+plot(cmtree$table, col = cmtree$byClass, 
+     main = paste("Decision Tree - Accuracy =", round(cmtree$overall['Accuracy'], 4)))
+```
+We see that the accuracy rate of the model is low: 0.7584 and therefore the out-of-sample-error is about 0.26 which is considerable.
+
+### Model Buliding with Generalized Boosted Regression Models
+
+```{r}
+set.seed(12345)
+controlGBM <- trainControl(method = "repeatedcv", number = 5, repeats = 1)
+modGBM  <- train(classe ~ ., data=trainData, method = "gbm", trControl = controlGBM, verbose = FALSE)
+modGBM$finalModel
+print(modGBM)
+```
+#### Validate the Generalized Boosted Regression Models
+```{r}
+predictGBM <- predict(modGBM, newdata=testData)
+cmGBM <- confusionMatrix(predictGBM, as.factor(testData$classe))
+cmGBM
+```
+
+The accuracy rate using the random forest is very high: Accuracy : 0.9638 and therefore the *out-of-sample-error is equal to 0.0362**.
+
+**Applying the best model to the validation data**
+By comparing the accuracy rate values of the three models, it is clear the the ‘Random Forest’ model is the winner. So will use it on the validation data
+
+```{r}
+Results <- predict(modelRf, newdata=testRaw); Results
+```
+
